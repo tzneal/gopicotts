@@ -11,6 +11,7 @@ import (
 
 func main() {
 	lang := flag.String("lang", "en-US", fmt.Sprintf("language to use %v", gopicotts.SupportedLanguages()))
+	upsample := flag.Bool("upsample", false, "upsample from 16000hz to 48000hz")
 	flag.Parse()
 
 	opts := gopicotts.DefaultOptions
@@ -27,15 +28,18 @@ func main() {
 
 	// pico outputs data in 16000 hz mono
 	const outputChannels = 1
-	const sampleRate = 16000
+	sampleRate := 16000.0
+	if *upsample {
+		sampleRate = 48000.0
+	}
 
-	buf := make([]int16, sampleRate/5)
+	buf := make([]int16, int(sampleRate/5))
 	strm, err := portaudio.OpenDefaultStream(0, outputChannels, sampleRate, 0, buf)
 	if err != nil {
 		log.Fatalf("error opening audio stream: %s", err)
 	}
 
-	bw := bufwriter{buf, strm, 0}
+	bw := bufwriter{buf, strm, 0, *upsample}
 	eng.SetOutput(bw.processSpeechData)
 	if err := strm.Start(); err != nil {
 		log.Fatalf("error starting audio stream: %s", err)
@@ -56,9 +60,10 @@ func main() {
 }
 
 type bufwriter struct {
-	output []int16
-	stream *portaudio.Stream
-	pos    int
+	output   []int16
+	stream   *portaudio.Stream
+	pos      int
+	upsample bool
 }
 
 func (b *bufwriter) processSpeechData(input []int16) {
@@ -66,11 +71,38 @@ func (b *bufwriter) processSpeechData(input []int16) {
 	offset := 0
 	for rem > 0 {
 		// copy our input speech data to the portaudio buffer
-		n := copy(b.output[b.pos:], input[offset:])
+		var n int
+		if !b.upsample {
+			n = copy(b.output[b.pos:], input[offset:])
+			b.pos += n
+		} else {
+			// upsample from 16000 hz to 48000 hz
+			n = 0
+			in, out := offset, b.pos
+			for {
+				if in >= len(input) {
+					break
+				}
+				if out >= len(b.output) {
+					break
+				}
+				b.output[out] = input[in]
+				if out > 0 && in > 0 {
+					prev := input[in-1]
+					cur := input[in]
+					delta := int(cur - prev)
+					b.output[out-2] = input[in] - int16(2*delta/3)
+					b.output[out-1] = input[in] - int16(delta/3)
+				}
+				in += 1
+				out += 3
+				n++
+			}
+			b.pos = out
+		}
+
 		rem -= n
 		offset += n
-
-		b.pos += n
 		if n == 0 {
 			if err := b.stream.Write(); err != nil {
 				fmt.Println(err)
