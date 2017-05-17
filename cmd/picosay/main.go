@@ -31,7 +31,6 @@ func main() {
 
 	buf := make([]int16, 128)
 	strm, err := portaudio.OpenDefaultStream(0, outputChannels, sampleRate, 0, buf)
-	fmt.Printf("%+v", strm.Info())
 	if err != nil {
 		log.Fatalf("error opening audio stream: %s", err)
 	}
