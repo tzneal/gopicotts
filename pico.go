@@ -33,8 +33,34 @@ pico_System* cloneSystem(pico_System s) {
 pico_Char* ptrAdd(pico_Char * buf, pico_Int16 x) {
   return buf + x;
 }
+
+pico_Status pico_getDataWrapped(pico_Engine engine, void *outBuffer, const pico_Int16 bufferSize,
+        pico_Int16 *outBytesReceived,pico_Int16 *outDataType) {
+
+  pico_Status status;
+  pico_Int16 totalReceived = 0;
+  int nextReq = 128;
+  int done = 0;
+  pico_Int16 *buf = outBuffer;
+  while (!done && totalReceived + nextReq < bufferSize) {
+	 status = pico_getData(engine, buf, nextReq, outBytesReceived, outDataType);
+   buf += *outBytesReceived/2;
+   totalReceived += *outBytesReceived;
+	 switch (status) {
+		 case PICO_STEP_BUSY: // still processing
+			 break;
+		 case PICO_STEP_IDLE: // completed
+   	 default:
+       done = 1;
+			 break;
+		 }
+   }
+   *outBytesReceived = totalReceived;
+   return status;
+}
 */
 import "C"
+
 import (
 	"errors"
 	"fmt"
@@ -208,25 +234,16 @@ func (e *Engine) deliverOutput(buf []int16) {
 }
 
 func (e *Engine) processOutput() error {
-	const chunkSize = 128
-	const bufSize = chunkSize * 16
-	var out_data_type, bytes_recv C.pico_Int16
+	const bufSize = 8192
+	var out_data_type, bytesRcvd C.pico_Int16
 	buf := make([]int16, bufSize)
 
-	// Retrieve the samples and add them to the buffer
 	done := false
-	offset := 0 // offset in samples (2 bytes per)
 	for !done {
-		// might read too much data next time, so deliver what we've got now
-		if offset+chunkSize/2 >= bufSize {
-			e.deliverOutput(buf[0:offset])
-			offset = 0
-		}
-		ret := C.pico_getData(e.picoEngine, unsafe.Pointer(&buf[offset]), bufSize, &bytes_recv, &out_data_type)
+		// Retrieve the samples and add them to the buffer
+		ret := C.pico_getDataWrapped(e.picoEngine, unsafe.Pointer(&buf[0]), bufSize, &bytesRcvd, &out_data_type)
 		// samples are 16 bit
-		samplesRecived := int(bytes_recv) / 2
-		offset += samplesRecived
-
+		samplesRecived := int(bytesRcvd) / 2
 		switch ret {
 		case C.PICO_STEP_BUSY: // still processing
 		case C.PICO_STEP_IDLE: // completed
@@ -234,16 +251,13 @@ func (e *Engine) processOutput() error {
 		default:
 			return e.getError("getting data", ret)
 		}
-
 		// no data
 		if samplesRecived == 0 {
 			continue
 		}
+		e.deliverOutput(buf[0:samplesRecived])
+	}
 
-	}
-	if offset != 0 {
-		e.deliverOutput(buf[0:offset])
-	}
 	return nil
 }
 
