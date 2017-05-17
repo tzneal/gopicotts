@@ -29,7 +29,7 @@ func main() {
 	const outputChannels = 1
 	const sampleRate = 16000
 
-	buf := make([]int16, 128)
+	buf := make([]int16, sampleRate/5)
 	strm, err := portaudio.OpenDefaultStream(0, outputChannels, sampleRate, 0, buf)
 	if err != nil {
 		log.Fatalf("error opening audio stream: %s", err)
@@ -43,12 +43,14 @@ func main() {
 	for _, a := range flag.Args() {
 		eng.SendText(a)
 	}
-	strm.Write()
 	// needed in case there is no end of sentence on the input
 	eng.FlushSendText()
+	strm.Write()
+	// flush any remaining data
 	if err := strm.Stop(); err != nil {
 		log.Fatalf("error stopping audio stream: %s", err)
 	}
+	strm.Close()
 	eng.CloseFileOutput()
 
 }
@@ -74,6 +76,11 @@ func (b *bufwriter) processSpeechData(input []int16) {
 				fmt.Println(err)
 			}
 			b.pos = 0
+			// portaudio has the data now, so clear our buffer to prevent a
+			// flush in main from replaying remaining data.
+			for i := 0; i < len(b.output); i++ {
+				b.output[i] = 0
+			}
 		}
 	}
 }
